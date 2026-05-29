@@ -1,22 +1,19 @@
 @echo off
-:: Must be run as Administrator
 cd /d "%~dp0"
 
 echo ============================================================
-echo  Thermalright LCD Service - Uninstall
+echo  Thermalright LCD Tray App - Uninstall
 echo ============================================================
 
-echo Stopping service...
-python service.py stop 2>nul
+echo Removing startup entry...
+pythonw tray.py --unregister-startup
 
-echo Removing service...
-python service.py remove
-if %errorlevel% neq 0 (
-    echo WARNING: Service removal reported an error (it may not have been installed).
-    pause
-    exit /b 1
-)
+echo Closing tray app (if running)...
+taskkill /FI "WINDOWTITLE eq TRLCDTray" /F >nul 2>&1
+:: pythonw processes have no window title, kill by image name as fallback
+:: (user may have other pythonw processes; we warn rather than force-kill all)
+echo NOTE: If the tray icon is still visible, right-click it and choose Exit.
 
 echo.
-echo Service removed successfully.
+echo Uninstall complete.
 pause

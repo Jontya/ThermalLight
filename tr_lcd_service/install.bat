@@ -1,9 +1,8 @@
 @echo off
-:: Must be run as Administrator
 cd /d "%~dp0"
 
 echo ============================================================
-echo  Thermalright LCD Service - Install
+echo  Thermalright LCD Tray App - Install
 echo ============================================================
 
 python --version >nul 2>&1
@@ -21,24 +20,17 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo Registering Windows service...
-python service.py install
+echo Registering startup entry...
+pythonw tray.py --register-startup
 if %errorlevel% neq 0 (
-    echo ERROR: Service registration failed.
-    pause
-    exit /b 1
+    echo WARNING: Could not register startup entry. You can add it manually.
 )
 
-echo Starting service...
-python service.py start
-if %errorlevel% neq 0 (
-    echo ERROR: Service failed to start. Check the log:
-    echo   C:\ProgramData\TRLCDService\service.log
-    pause
-    exit /b 1
-)
+echo Launching tray app...
+start "" pythonw tray.py
 
 echo.
-echo Service installed and started successfully.
+echo Done. The LCD icon will appear in the notification area.
+echo Right-click it and choose "Change Image..." to set your image.
 echo Log file: C:\ProgramData\TRLCDService\service.log
 pause

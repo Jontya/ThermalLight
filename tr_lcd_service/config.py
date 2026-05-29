@@ -7,6 +7,8 @@ _DEFAULTS = {
     'log_level': 'INFO',
 }
 
+_SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 class Config:
     def __init__(self):
@@ -15,9 +17,12 @@ class Config:
         self.log_level: str = 'INFO'
 
 
+def _config_path() -> str:
+    return os.path.join(_SERVICE_DIR, 'config.ini')
+
+
 def load_config() -> Config:
-    service_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(service_dir, 'config.ini')
+    config_path = _config_path()
 
     parser = configparser.ConfigParser(defaults=_DEFAULTS)
     parser.read(config_path, encoding='utf-8')
@@ -30,3 +35,15 @@ def load_config() -> Config:
         cfg.log_level = parser.get(section, 'log_level', fallback='INFO').upper()
 
     return cfg
+
+
+def save_image_path(new_path: str) -> None:
+    """Write image_path back to config.ini, preserving other keys."""
+    config_path = _config_path()
+    parser = configparser.ConfigParser(defaults=_DEFAULTS)
+    parser.read(config_path, encoding='utf-8')
+    if not parser.has_section('lcd'):
+        parser.add_section('lcd')
+    parser.set('lcd', 'image_path', new_path)
+    with open(config_path, 'w', encoding='utf-8') as fh:
+        parser.write(fh)
