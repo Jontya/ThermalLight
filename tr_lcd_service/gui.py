@@ -40,6 +40,7 @@ class LCDEditorWindow(ctk.CTk):
         self._sel_at_drag: tuple[int, int, int, int] | None = None
         self._thumb_refs: list = []  # keep PhotoImage refs alive
         self._icon_refs: list = []
+        self._last_applied_source: str | None = None  # original path, for gallery highlight
 
         self.title('Thermalright LCD Editor')
         self.geometry('920x580')
@@ -144,12 +145,12 @@ class LCDEditorWindow(ctk.CTk):
         self._thumb_refs.clear()
 
         os.makedirs(APP_DATA_DIR, exist_ok=True)
-        cfg = load_config()
-        active = os.path.normcase(cfg.image_path) if cfg.image_path else ''
+        active = (os.path.normcase(self._last_applied_source)
+                  if self._last_applied_source else '')
 
         files = sorted(
             (f for f in os.listdir(APP_DATA_DIR)
-             if f.lower().endswith(IMAGE_EXTS)),
+             if f.lower().endswith(IMAGE_EXTS) and not f.startswith('_')),
             key=lambda f: os.path.getmtime(os.path.join(APP_DATA_DIR, f)),
             reverse=True,
         )
@@ -385,7 +386,11 @@ class LCDEditorWindow(ctk.CTk):
         if self._img_orig is None or self._sel is None or self._source_path is None:
             return
         x1, y1, x2, y2 = self._sel
-        if self._source_path.lower().endswith('.gif'):
+        is_gif = self._source_path.lower().endswith('.gif')
+        ext = '.gif' if is_gif else '.png'
+        out_path = os.path.join(APP_DATA_DIR, f'_lcd_output{ext}')
+
+        if is_gif:
             try:
                 src = Image.open(self._source_path)
                 n = getattr(src, 'n_frames', 1)
@@ -396,7 +401,7 @@ class LCDEditorWindow(ctk.CTk):
                     out_frames.append(frame.resize((LCD_SIZE, LCD_SIZE), Image.LANCZOS))
                     durations.append(src.info.get('duration', 100))
                 out_frames[0].save(
-                    self._source_path, save_all=True, format='GIF',
+                    out_path, save_all=True, format='GIF',
                     append_images=out_frames[1:], loop=0, duration=durations,
                 )
             except Exception:
@@ -404,8 +409,10 @@ class LCDEditorWindow(ctk.CTk):
         else:
             cropped = self._img_orig.crop((x1, y1, x2, y2))
             result = cropped.resize((LCD_SIZE, LCD_SIZE), Image.LANCZOS).convert('RGB')
-            result.save(self._source_path)
-        save_image_path(self._source_path)
+            result.save(out_path)
+
+        self._last_applied_source = self._source_path
+        save_image_path(out_path)
         self._lcd_thread.signal_reload()
         self._status_label.configure(
             text=f'Applied: {os.path.basename(self._source_path)}',
