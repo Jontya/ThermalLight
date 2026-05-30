@@ -3,7 +3,7 @@ import os
 
 _DEFAULTS = {
     'image_path': '',
-    'resend_interval': '60',
+    'resend_interval': '1',
     'log_level': 'INFO',
 }
 
@@ -31,7 +31,7 @@ def load_config() -> Config:
     section = 'lcd'
     if parser.has_section(section):
         cfg.image_path = parser.get(section, 'image_path').strip()
-        cfg.resend_interval = max(5, parser.getint(section, 'resend_interval', fallback=60))
+        cfg.resend_interval = max(1, parser.getint(section, 'resend_interval', fallback=1))
         cfg.log_level = parser.get(section, 'log_level', fallback='INFO').upper()
 
     return cfg

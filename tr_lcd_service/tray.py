@@ -14,6 +14,7 @@ import logging
 import logging.handlers
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -24,14 +25,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 from config import load_config, save_image_path
 from device import (
-    close_drive,
-    do_hid_handshake,
-    find_disk_device,
-    find_hid_device,
-    open_drive,
-    send_scsi_frame,
+    close_device,
+    find_device,
+    get_resolution,
+    open_device,
+    send_image,
 )
-from image_utils import encode_rgb565, pad_to_512, resize_image
+from image_utils import encode_rgb565, resize_image
 
 # ---------------------------------------------------------------------------
 # Paths / constants
@@ -52,6 +52,45 @@ IMAGE_EXTS = [
     ('Image files', '*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff'),
     ('All files',   '*.*'),
 ]
+
+# ---------------------------------------------------------------------------
+# File picker — subprocess so tkinter runs on a proper main thread
+# ---------------------------------------------------------------------------
+
+_PICKER_SCRIPT = """\
+import sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+root.attributes('-topmost', True)
+path = filedialog.askopenfilename(
+    title='Select LCD image',
+    filetypes=[
+        ('Image files', '*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff'),
+        ('All files', '*.*'),
+    ],
+)
+root.destroy()
+if path:
+    sys.stdout.write(path)
+"""
+
+def _pick_file_native() -> str | None:
+    """Show a file dialog in a subprocess (avoids tkinter main-thread requirement)."""
+    # Use python.exe (not pythonw.exe) so stdout is readable via pipe
+    py = os.path.join(os.path.dirname(sys.executable), 'python.exe')
+    if not os.path.exists(py):
+        py = sys.executable
+    try:
+        result = subprocess.run(
+            [py, '-c', _PICKER_SCRIPT],
+            capture_output=True, text=True, timeout=120,
+        )
+        path = result.stdout.strip()
+        return path if path else None
+    except Exception:
+        logging.getLogger('tray').exception('File picker failed')
+        return None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -148,8 +187,8 @@ def _store_image(src_path: str) -> str:
     Returns the destination path.
     """
     os.makedirs(APP_DATA_DIR, exist_ok=True)
-    ext = os.path.splitext(src_path)[1].lower() or '.png'
-    dest = os.path.join(APP_DATA_DIR, f'current_image{ext}')
+    filename = os.path.basename(src_path)
+    dest = os.path.join(APP_DATA_DIR, filename)
     shutil.copy2(src_path, dest)
     return dest
 
@@ -192,48 +231,41 @@ class LCDThread(threading.Thread):
 
     def run(self) -> None:
         logger = logging.getLogger('lcd')
-        drive_handle = None
+        dev = None
         frame_data: bytes | None = None
+        width, height = 240, 240
 
         while not self._stop.is_set():
             # ── Device discovery ───────────────────────────────────────
-            if drive_handle is None:
+            if dev is None:
                 try:
-                    disk_path = find_disk_device()
-                    if disk_path is None:
-                        logger.warning('Disk device not found, retrying in %ds', DEVICE_RETRY_S)
+                    dev = find_device()
+                    if dev is None:
+                        logger.warning('Device not found, retrying in %ds', DEVICE_RETRY_S)
                         if self._wait(DEVICE_RETRY_S):
                             break
                         continue
 
-                    hid_path = find_hid_device()
-                    if hid_path is None:
-                        logger.warning('HID interface not found, retrying in %ds', DEVICE_RETRY_S)
-                        if self._wait(DEVICE_RETRY_S):
-                            break
-                        continue
-
-                    logger.info('Disk: %s', disk_path)
-                    logger.info('HID : %s', hid_path)
-                    width, height = do_hid_handshake(hid_path)
+                    open_device(dev)
+                    width, height = get_resolution(dev)
+                    logger.info('Resolution: %dx%d', width, height)
 
                     frame_data = self._encode_current_image(width, height)
                     if frame_data is None:
+                        close_device(dev)
+                        dev = None
                         if self._wait(DEVICE_RETRY_S):
                             break
                         continue
 
-                    drive_handle = open_drive(disk_path)
-                    logger.info('Drive handle opened')
-
                 except Exception:
                     logger.exception('Device init failed')
-                    if drive_handle is not None:
+                    if dev is not None:
                         try:
-                            close_drive(drive_handle)
+                            close_device(dev)
                         except Exception:
                             pass
-                        drive_handle = None
+                        dev = None
                     if self._wait(DEVICE_RETRY_S):
                         break
                     continue
@@ -243,15 +275,7 @@ class LCDThread(threading.Thread):
                 self._reload.clear()
                 try:
                     cfg = load_config()
-                    # Re-discover resolution via quick handshake if needed
-                    hid_path = find_hid_device()
-                    if hid_path:
-                        w, h = do_hid_handshake(hid_path)
-                    else:
-                        # Fall back to previously detected size (re-open won't give us it)
-                        # Re-encode at default 240x240; device thread will correct next cycle
-                        w, h = 240, 240
-                    new_frame = self._encode_current_image(w, h)
+                    new_frame = self._encode_current_image(width, height)
                     if new_frame is not None:
                         frame_data = new_frame
                         logger.info('Image reloaded: %s', cfg.image_path)
@@ -260,24 +284,24 @@ class LCDThread(threading.Thread):
 
             # ── Send frame ─────────────────────────────────────────────
             try:
-                ok = send_scsi_frame(drive_handle, frame_data)
+                ok = send_image(dev, frame_data, width, height)
                 if ok:
                     logger.info('Frame sent')
                 else:
                     logger.error('Frame send failed — rediscovering')
                     try:
-                        close_drive(drive_handle)
+                        close_device(dev)
                     except Exception:
                         pass
-                    drive_handle = None
+                    dev = None
                     continue
             except Exception:
                 logger.exception('Frame send exception — rediscovering')
                 try:
-                    close_drive(drive_handle)
+                    close_device(dev)
                 except Exception:
                     pass
-                drive_handle = None
+                dev = None
                 continue
 
             # ── Wait for next send or reload/stop ──────────────────────
@@ -285,12 +309,12 @@ class LCDThread(threading.Thread):
             self._wait(cfg.resend_interval)
 
         # ── Cleanup ────────────────────────────────────────────────────
-        if drive_handle is not None:
+        if dev is not None:
             try:
-                close_drive(drive_handle)
-                logging.getLogger('lcd').info('Drive handle closed')
+                close_device(dev)
+                logging.getLogger('lcd').info('Device closed')
             except Exception as exc:
-                logging.getLogger('lcd').warning('Error closing handle: %s', exc)
+                logging.getLogger('lcd').warning('Error closing device: %s', exc)
 
     @staticmethod
     def _encode_current_image(width: int, height: int) -> bytes | None:
@@ -305,8 +329,7 @@ class LCDThread(threading.Thread):
         try:
             img = Image.open(cfg.image_path)
             img = resize_image(img, width, height)
-            raw = encode_rgb565(img)
-            return pad_to_512(raw)
+            return encode_rgb565(img)
         except Exception:
             logger.exception('Image encode failed')
             return None
@@ -320,28 +343,19 @@ class TrayApp:
     def __init__(self) -> None:
         self._lcd = LCDThread()
         self._icon: pystray.Icon | None = None
+        self._dialog_lock = threading.Lock()
+        self._exiting = False
 
     # ── Menu actions ───────────────────────────────────────────────────
 
     def _on_change_image(self, icon: pystray.Icon, item) -> None:
         """Open a file dialog and update the image."""
+        if not self._dialog_lock.acquire(blocking=False):
+            return  # dialog already open
         try:
-            import tkinter as tk
-            from tkinter import filedialog, messagebox
-
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes('-topmost', True)
-
-            path = filedialog.askopenfilename(
-                title='Select LCD image',
-                filetypes=IMAGE_EXTS,
-                parent=root,
-            )
-            root.destroy()
-
+            path = _pick_file_native()
             if not path:
-                return  # user cancelled
+                return
 
             stored = _store_image(path)
             save_image_path(stored)
@@ -351,6 +365,8 @@ class TrayApp:
 
         except Exception:
             logging.getLogger('tray').exception('Change image failed')
+        finally:
+            self._dialog_lock.release()
 
     def _on_open_log(self, icon: pystray.Icon, item) -> None:
         try:
@@ -363,9 +379,14 @@ class TrayApp:
             logging.getLogger('tray').exception('Open log failed')
 
     def _on_exit(self, icon: pystray.Icon, item) -> None:
+        if self._exiting:
+            return
+        self._exiting = True
         logging.getLogger('tray').info('Exit requested')
         self._lcd.stop()
-        icon.stop()
+        # icon.stop() must not be called from within the pystray callback thread
+        # or it deadlocks the win32 message loop. Dispatch to a new thread.
+        threading.Thread(target=icon.stop, daemon=True).start()
 
     # ── Helpers ────────────────────────────────────────────────────────
 

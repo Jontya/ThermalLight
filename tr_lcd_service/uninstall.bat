@@ -6,7 +6,7 @@ echo  Thermalright LCD Tray App - Uninstall
 echo ============================================================
 
 echo Removing startup entry...
-pythonw tray.py --unregister-startup
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v TRLCDTray /f >nul 2>&1
 
 echo Closing tray app (if running)...
 taskkill /FI "WINDOWTITLE eq TRLCDTray" /F >nul 2>&1

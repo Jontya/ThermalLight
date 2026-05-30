@@ -13,7 +13,7 @@ if %errorlevel% neq 0 (
 )
 
 echo Installing Python dependencies...
-python -m pip install -r requirements.txt --quiet
+python -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo ERROR: pip install failed.
     pause
