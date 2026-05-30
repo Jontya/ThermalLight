@@ -171,7 +171,8 @@ class LCDEditorWindow(ctk.CTk):
                     text = 'GIF'
                     bb = d.textbbox((0, 0), text, font=fnt)
                     tw, th = bb[2] - bb[0], bb[3] - bb[1]
-                    pad, bx, by = 2, thumb.size[0] - tw - pad * 2 - 3, 3
+                    pad = 2
+                    bx, by = thumb.size[0] - tw - pad * 2 - 3, 3
                     d.rectangle([bx - pad, by - pad, bx + tw + pad, by + th + pad],
                                 fill=(0, 100, 200, 210))
                     d.text((bx, by), text, font=fnt, fill=(255, 255, 255, 255))
