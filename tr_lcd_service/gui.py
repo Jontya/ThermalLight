@@ -45,6 +45,9 @@ class LCDEditorWindow(ctk.CTk):
         self._sel_at_drag: tuple[int, int, int, int] | None = None
         self._icon_refs: list = []
         self._last_applied_source: str | None = None  # original path, for gallery highlight
+        self._sel_overlay_ids: list[int] = []   # 4 stipple overlay rects
+        self._sel_rect_id: int | None = None    # blue selection border
+        self._sel_handle_ids: list[int] = []    # 4 corner handle rects
         self._thumb_cache: dict[tuple[str, float], ImageTk.PhotoImage] = {}
         self._gallery_state: list[tuple[str, float]] = []   # last rendered (normpath, mtime) list
         self._gallery_buttons: list[tuple[str, ctk.CTkButton]] = []  # parallel to _gallery_state
@@ -259,6 +262,9 @@ class LCDEditorWindow(ctk.CTk):
         disp = self._img_orig.resize((nw, nh), Image.LANCZOS)
         self._canvas_photo = ImageTk.PhotoImage(disp)
         self._canvas.delete('all')
+        self._sel_rect_id = None
+        self._sel_overlay_ids.clear()
+        self._sel_handle_ids.clear()
         self._canvas.create_image(ox, oy, anchor='nw', image=self._canvas_photo)
 
     def _default_selection(self) -> None:
@@ -274,8 +280,11 @@ class LCDEditorWindow(ctk.CTk):
     _HANDLE_R = 6  # handle hit radius in canvas pixels
 
     def _draw_selection(self) -> None:
-        self._canvas.delete('sel')
         if self._sel is None or self._img_orig is None:
+            for item in self._sel_overlay_ids + self._sel_handle_ids:
+                self._canvas.itemconfigure(item, state='hidden')
+            if self._sel_rect_id is not None:
+                self._canvas.itemconfigure(self._sel_rect_id, state='hidden')
             return
         ox, oy = self._img_offset
         s = self._img_scale
@@ -287,26 +296,40 @@ class LCDEditorWindow(ctk.CTk):
         iw, ih = self._img_orig.size
         ix2 = ox + iw * s
         iy2 = oy + ih * s
-        for coords in [
+        h = self._HANDLE_R
+        overlay_coords = [
             (ox, oy, cx1, iy2),
             (cx2, oy, ix2, iy2),
             (cx1, oy, cx2, cy1),
             (cx1, cy2, cx2, iy2),
-        ]:
-            self._canvas.create_rectangle(
-                *coords, fill='black', stipple='gray50',
-                outline='', tags='sel',
+        ]
+        handle_coords = [
+            (cx1 - h, cy1 - h, cx1 + h, cy1 + h),
+            (cx2 - h, cy1 - h, cx2 + h, cy1 + h),
+            (cx1 - h, cy2 - h, cx1 + h, cy2 + h),
+            (cx2 - h, cy2 - h, cx2 + h, cy2 + h),
+        ]
+        if self._sel_rect_id is None:
+            self._sel_overlay_ids = [
+                self._canvas.create_rectangle(*c, fill='black', stipple='gray50', outline='')
+                for c in overlay_coords
+            ]
+            self._sel_rect_id = self._canvas.create_rectangle(
+                cx1, cy1, cx2, cy2, outline='#50B4FF', width=2,
             )
-        self._canvas.create_rectangle(
-            cx1, cy1, cx2, cy2,
-            outline='#50B4FF', width=2, tags='sel',
-        )
-        h = self._HANDLE_R
-        for hx, hy in [(cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2)]:
-            self._canvas.create_rectangle(
-                hx - h, hy - h, hx + h, hy + h,
-                fill='#50B4FF', outline='white', width=1, tags='sel',
-            )
+            self._sel_handle_ids = [
+                self._canvas.create_rectangle(*c, fill='#50B4FF', outline='white', width=1)
+                for c in handle_coords
+            ]
+        else:
+            for item, c in zip(self._sel_overlay_ids, overlay_coords):
+                self._canvas.itemconfigure(item, state='normal')
+                self._canvas.coords(item, *c)
+            self._canvas.itemconfigure(self._sel_rect_id, state='normal')
+            self._canvas.coords(self._sel_rect_id, cx1, cy1, cx2, cy2)
+            for item, c in zip(self._sel_handle_ids, handle_coords):
+                self._canvas.itemconfigure(item, state='normal')
+                self._canvas.coords(item, *c)
 
     # ── Mouse events ───────────────────────────────────────────────────
 
