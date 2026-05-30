@@ -78,12 +78,33 @@ class LCDEditorWindow(ctk.CTk):
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         draw.text(((size - tw) / 2, (size - th) / 2 - 2), text,
                   fill=(80, 180, 255, 255), font=font)
-        icon32 = ImageTk.PhotoImage(img.resize((32, 32), Image.LANCZOS))
-        icon16 = ImageTk.PhotoImage(img.resize((16, 16), Image.LANCZOS))
-        self._icon_refs = [icon32, icon16]
-        self.iconphoto(True, icon32, icon16)
+        try:
+            import tempfile as _tf, os as _os
+            ico_sizes = [(16, 16), (32, 32), (48, 48)]
+            frames = [img.resize(s, Image.LANCZOS).convert('RGBA') for s in ico_sizes]
+            tmp = _tf.NamedTemporaryFile(suffix='.ico', delete=False)
+            tmp.close()
+            frames[0].save(tmp.name, format='ICO', sizes=ico_sizes,
+                           append_images=frames[1:])
+            self._icon_tmp = tmp.name
+            self.iconbitmap(tmp.name)
+        except Exception:
+            icon32 = ImageTk.PhotoImage(img.resize((32, 32), Image.LANCZOS))
+            icon16 = ImageTk.PhotoImage(img.resize((16, 16), Image.LANCZOS))
+            self._icon_refs = [icon32, icon16]
+            self.iconphoto(True, icon32, icon16)
 
     # ── Public ─────────────────────────────────────────────────────────
+
+    def destroy(self) -> None:
+        tmp = getattr(self, '_icon_tmp', None)
+        if tmp:
+            try:
+                import os as _os
+                _os.unlink(tmp)
+            except OSError:
+                pass
+        super().destroy()
 
     def show(self) -> None:
         self.deiconify()

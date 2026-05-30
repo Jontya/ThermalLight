@@ -10,10 +10,12 @@ CLI flags (used by install/uninstall scripts):
     --unregister-startup         # remove from HKCU Run, then exit
 """
 
+import ctypes
 import logging
 import logging.handlers
 import os
 import sys
+import tempfile
 import threading
 import time
 import winreg
@@ -308,6 +310,13 @@ class TrayApp:
         )
 
     def run(self) -> None:
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'ThermalLight.LCD.Tray'
+            )
+        except Exception:
+            pass
+
         cfg = load_config()
         _setup_logging(cfg.log_level)
         log = logging.getLogger('tray')
