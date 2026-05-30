@@ -156,7 +156,8 @@ class LCDThread(threading.Thread):
     def run(self) -> None:
         logger = logging.getLogger('lcd')
         dev = None
-        frame_data: bytes | None = None
+        frames: list[tuple[bytes, float]] | None = None
+        frame_idx = 0
         width, height = 240, 240
 
         while not self._stop.is_set():
@@ -171,8 +172,9 @@ class LCDThread(threading.Thread):
                     open_device(dev)
                     width, height = get_resolution(dev)
                     logger.info('Resolution: %dx%d', width, height)
-                    frame_data = self._encode_current_image(width, height)
-                    if frame_data is None:
+                    frames = self._load_frames(width, height)
+                    frame_idx = 0
+                    if frames is None:
                         close_device(dev)
                         dev = None
                         if self._wait(DEVICE_RETRY_S):
@@ -193,16 +195,19 @@ class LCDThread(threading.Thread):
             if self._reload.is_set():
                 self._reload.clear()
                 try:
-                    new_frame = self._encode_current_image(width, height)
-                    if new_frame is not None:
-                        frame_data = new_frame
+                    new_frames = self._load_frames(width, height)
+                    if new_frames is not None:
+                        frames = new_frames
+                        frame_idx = 0
                         cfg = load_config()
                         logger.info('Image reloaded: %s', cfg.image_path)
                 except Exception:
                     logger.exception('Image reload failed')
 
+            data, delay = frames[frame_idx]
+            frame_idx = (frame_idx + 1) % len(frames)
             try:
-                ok = send_image(dev, frame_data, width, height)
+                ok = send_image(dev, data, width, height)
                 if not ok:
                     logger.error('Frame send failed — rediscovering')
                     try:
@@ -220,8 +225,8 @@ class LCDThread(threading.Thread):
                 dev = None
                 continue
 
-            cfg = load_config()
-            self._wait(cfg.resend_interval)
+            if self._wait(delay):
+                break
 
         if dev is not None:
             try:
@@ -231,7 +236,8 @@ class LCDThread(threading.Thread):
                 logging.getLogger('lcd').warning('Error closing device: %s', exc)
 
     @staticmethod
-    def _encode_current_image(width: int, height: int) -> bytes | None:
+    def _load_frames(width: int, height: int) -> list[tuple[bytes, float]] | None:
+        """Return list of (rgb565_bytes, delay_s). Single-element for static images."""
         logger = logging.getLogger('lcd')
         cfg = load_config()
         if not cfg.image_path:
@@ -242,8 +248,18 @@ class LCDThread(threading.Thread):
             return None
         try:
             img = Image.open(cfg.image_path)
-            img = resize_image(img, width, height)
-            return encode_rgb565(img)
+            n = getattr(img, 'n_frames', 1)
+            if n <= 1:
+                frame = resize_image(img.convert('RGB'), width, height)
+                return [(encode_rgb565(frame), float(cfg.resend_interval))]
+            result = []
+            for i in range(n):
+                img.seek(i)
+                delay = max(0.033, img.info.get('duration', 100) / 1000.0)
+                frame = resize_image(img.convert('RGB'), width, height)
+                result.append((encode_rgb565(frame), delay))
+            logger.info('GIF loaded: %d frames', n)
+            return result
         except Exception:
             logger.exception('Image encode failed')
             return None

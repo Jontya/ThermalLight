@@ -12,7 +12,7 @@ import os
 import shutil
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 import customtkinter as ctk
 
 from config import load_config, save_image_path
@@ -55,7 +55,6 @@ class LCDEditorWindow(ctk.CTk):
     def _set_window_icon(self) -> None:
         size = 64
         img = Image.new('RGBA', (size, size), (26, 26, 46, 255))
-        from PIL import ImageDraw, ImageFont
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle([2, 2, size - 3, size - 3], radius=10,
                                outline=(80, 180, 255, 255), width=3)
@@ -160,6 +159,23 @@ class LCDEditorWindow(ctk.CTk):
             try:
                 thumb = Image.open(fpath).convert('RGB')
                 thumb.thumbnail((80, 80), Image.LANCZOS)
+                if fname.lower().endswith('.gif'):
+                    thumb = thumb.convert('RGBA')
+                    badge = Image.new('RGBA', thumb.size, (0, 0, 0, 0))
+                    d = ImageDraw.Draw(badge)
+                    try:
+                        fnt = ImageFont.truetype('arialbd.ttf', 10)
+                    except OSError:
+                        fnt = ImageFont.load_default()
+                    text = 'GIF'
+                    bb = d.textbbox((0, 0), text, font=fnt)
+                    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+                    pad, bx, by = 2, thumb.size[0] - tw - pad * 2 - 3, 3
+                    d.rectangle([bx - pad, by - pad, bx + tw + pad, by + th + pad],
+                                fill=(0, 100, 200, 210))
+                    d.text((bx, by), text, font=fnt, fill=(255, 255, 255, 255))
+                    thumb.paste(badge, (0, 0), badge)
+                    thumb = thumb.convert('RGB')
                 photo = ImageTk.PhotoImage(thumb)
                 self._thumb_refs.append(photo)
 
@@ -369,9 +385,26 @@ class LCDEditorWindow(ctk.CTk):
         if self._img_orig is None or self._sel is None or self._source_path is None:
             return
         x1, y1, x2, y2 = self._sel
-        cropped = self._img_orig.crop((x1, y1, x2, y2))
-        result = cropped.resize((LCD_SIZE, LCD_SIZE), Image.LANCZOS).convert('RGB')
-        result.save(self._source_path)
+        if self._source_path.lower().endswith('.gif'):
+            try:
+                src = Image.open(self._source_path)
+                n = getattr(src, 'n_frames', 1)
+                out_frames, durations = [], []
+                for i in range(n):
+                    src.seek(i)
+                    frame = src.convert('RGB').crop((x1, y1, x2, y2))
+                    out_frames.append(frame.resize((LCD_SIZE, LCD_SIZE), Image.LANCZOS))
+                    durations.append(src.info.get('duration', 100))
+                out_frames[0].save(
+                    self._source_path, save_all=True, format='GIF',
+                    append_images=out_frames[1:], loop=0, duration=durations,
+                )
+            except Exception:
+                return
+        else:
+            cropped = self._img_orig.crop((x1, y1, x2, y2))
+            result = cropped.resize((LCD_SIZE, LCD_SIZE), Image.LANCZOS).convert('RGB')
+            result.save(self._source_path)
         save_image_path(self._source_path)
         self._lcd_thread.signal_reload()
         self._status_label.configure(
