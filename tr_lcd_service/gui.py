@@ -43,9 +43,11 @@ class LCDEditorWindow(ctk.CTk):
         self._drag_mode: str | None = None   # 'move' | 'tl'|'tr'|'bl'|'br'
         self._drag_origin: tuple[int, int] | None = None  # canvas coords at mousedown
         self._sel_at_drag: tuple[int, int, int, int] | None = None
-        self._thumb_refs: list = []  # keep PhotoImage refs alive
         self._icon_refs: list = []
         self._last_applied_source: str | None = None  # original path, for gallery highlight
+        self._thumb_cache: dict[tuple[str, float], ImageTk.PhotoImage] = {}
+        self._gallery_state: list[tuple[str, float]] = []   # last rendered (normpath, mtime) list
+        self._gallery_buttons: list[tuple[str, ctk.CTkButton]] = []  # parallel to _gallery_state
 
         self.title('Thermalright LCD Editor')
         self.geometry('920x580')
@@ -145,57 +147,84 @@ class LCDEditorWindow(ctk.CTk):
     # ── Gallery ────────────────────────────────────────────────────────
 
     def _refresh_gallery(self) -> None:
-        for w in self._gallery_frame.winfo_children():
-            w.destroy()
-        self._thumb_refs.clear()
-
         os.makedirs(APP_DATA_DIR, exist_ok=True)
         active = (os.path.normcase(self._last_applied_source)
                   if self._last_applied_source else '')
 
-        files = sorted(
+        # Build ordered list of (normpath, mtime) for files that exist and can be stat'd
+        new_state: list[tuple[str, float]] = []
+        for fname in sorted(
             (f for f in os.listdir(APP_DATA_DIR)
              if f.lower().endswith(IMAGE_EXTS) and not f.startswith('_')),
             key=lambda f: os.path.getmtime(os.path.join(APP_DATA_DIR, f)),
             reverse=True,
-        )
-
-        for fname in files:
-            fpath = os.path.join(APP_DATA_DIR, fname)
+        ):
+            fpath = os.path.normcase(os.path.join(APP_DATA_DIR, fname))
             try:
-                thumb = Image.open(fpath).convert('RGB')
-                thumb.thumbnail((80, 80), Image.LANCZOS)
-                if fname.lower().endswith('.gif'):
-                    thumb = thumb.convert('RGBA')
-                    badge = Image.new('RGBA', thumb.size, (0, 0, 0, 0))
-                    d = ImageDraw.Draw(badge)
-                    fnt = _GIF_BADGE_FONT
-                    text = 'GIF'
-                    bb = d.textbbox((0, 0), text, font=fnt)
-                    tw, th = bb[2] - bb[0], bb[3] - bb[1]
-                    pad = 2
-                    bx, by = thumb.size[0] - tw - pad * 2 - 3, 3
-                    d.rectangle([bx - pad, by - pad, bx + tw + pad, by + th + pad],
-                                fill=(0, 100, 200, 210))
-                    d.text((bx, by), text, font=fnt, fill=(255, 255, 255, 255))
-                    thumb.paste(badge, (0, 0), badge)
-                    thumb = thumb.convert('RGB')
-                photo = ImageTk.PhotoImage(thumb)
-                self._thumb_refs.append(photo)
+                mtime = os.path.getmtime(fpath)
+            except OSError:
+                continue
+            new_state.append((fpath, mtime))
 
-                is_active = os.path.normcase(fpath) == active
-                border = 2 if is_active else 0
-                btn = ctk.CTkButton(
-                    self._gallery_frame,
-                    image=photo, text='',
-                    width=88, height=88,
-                    border_width=border,
-                    border_color='#50B4FF',
-                    command=lambda p=fpath: self._load_image(p),
-                )
-                btn.pack(pady=4)
-            except Exception:
-                pass
+        # Fast path: file list and mtimes unchanged — only border updates needed
+        if new_state == self._gallery_state:
+            for fpath, btn in self._gallery_buttons:
+                border = 2 if fpath == active else 0
+                btn.configure(border_width=border)
+            return
+
+        # Slow path: structural change — evict stale cache, rebuild widgets
+        live_keys = {(p, m) for p, m in new_state}
+        for key in list(self._thumb_cache):
+            if key not in live_keys:
+                del self._thumb_cache[key]
+
+        new_buttons: list[tuple[str, ctk.CTkButton]] = []
+        for w in self._gallery_frame.winfo_children():
+            w.destroy()
+
+        for fpath, mtime in new_state:
+            key = (fpath, mtime)
+            photo = self._thumb_cache.get(key)
+            if photo is None:
+                try:
+                    thumb = Image.open(fpath).convert('RGB')
+                    thumb.thumbnail((80, 80), Image.LANCZOS)
+                    if fpath.lower().endswith('.gif'):
+                        thumb = thumb.convert('RGBA')
+                        badge = Image.new('RGBA', thumb.size, (0, 0, 0, 0))
+                        d = ImageDraw.Draw(badge)
+                        fnt = _GIF_BADGE_FONT
+                        text = 'GIF'
+                        bb = d.textbbox((0, 0), text, font=fnt)
+                        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+                        pad = 2
+                        bx, by = thumb.size[0] - tw - pad * 2 - 3, 3
+                        d.rectangle([bx - pad, by - pad, bx + tw + pad, by + th + pad],
+                                    fill=(0, 100, 200, 210))
+                        d.text((bx, by), text, font=fnt, fill=(255, 255, 255, 255))
+                        thumb.paste(badge, (0, 0), badge)
+                        thumb = thumb.convert('RGB')
+                    photo = ImageTk.PhotoImage(thumb)
+                    self._thumb_cache[key] = photo
+                except Exception:
+                    continue
+
+            is_active = fpath == active
+            border = 2 if is_active else 0
+            btn = ctk.CTkButton(
+                self._gallery_frame,
+                image=photo, text='',
+                width=88, height=88,
+                border_width=border,
+                border_color='#50B4FF',
+                command=lambda p=fpath: self._load_image(p),
+            )
+            btn.pack(pady=4)
+            new_buttons.append((fpath, btn))
+
+        self._gallery_state = new_state
+        self._gallery_buttons = new_buttons
 
     # ── Crop editor ────────────────────────────────────────────────────
 
