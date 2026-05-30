@@ -35,8 +35,11 @@ class LCDEditorWindow(ctk.CTk):
         self._img_offset: tuple[int, int] = (0, 0)
         self._img_scale: float = 1.0
         self._sel: tuple[int, int, int, int] | None = None  # x1,y1,x2,y2 image coords
-        self._drag_start: tuple[int, int] | None = None
+        self._drag_mode: str | None = None   # 'move' | 'tl'|'tr'|'bl'|'br'
+        self._drag_origin: tuple[int, int] | None = None  # canvas coords at mousedown
+        self._sel_at_drag: tuple[int, int, int, int] | None = None
         self._thumb_refs: list = []  # keep PhotoImage refs alive
+        self._icon_refs: list = []
 
         self.title('Thermalright LCD Editor')
         self.geometry('920x580')
@@ -45,6 +48,30 @@ class LCDEditorWindow(ctk.CTk):
         self.withdraw()   # start hidden
 
         self._build_ui()
+        self._set_window_icon()
+
+    # ── Icon ───────────────────────────────────────────────────────────
+
+    def _set_window_icon(self) -> None:
+        size = 64
+        img = Image.new('RGBA', (size, size), (26, 26, 46, 255))
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle([2, 2, size - 3, size - 3], radius=10,
+                               outline=(80, 180, 255, 255), width=3)
+        try:
+            font = ImageFont.truetype('arialbd.ttf', 18)
+        except OSError:
+            font = ImageFont.load_default()
+        text = 'LCD'
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.text(((size - tw) / 2, (size - th) / 2 - 2), text,
+                  fill=(80, 180, 255, 255), font=font)
+        icon32 = ImageTk.PhotoImage(img.resize((32, 32), Image.LANCZOS))
+        icon16 = ImageTk.PhotoImage(img.resize((16, 16), Image.LANCZOS))
+        self._icon_refs = [icon32, icon16]
+        self.iconphoto(True, icon32, icon16)
 
     # ── Public ─────────────────────────────────────────────────────────
 
@@ -195,6 +222,8 @@ class LCDEditorWindow(ctk.CTk):
         self._sel = (x1, y1, x1 + side, y1 + side)
         self._draw_selection()
 
+    _HANDLE_R = 6  # handle hit radius in canvas pixels
+
     def _draw_selection(self) -> None:
         self._canvas.delete('sel')
         if self._sel is None or self._img_orig is None:
@@ -209,7 +238,6 @@ class LCDEditorWindow(ctk.CTk):
         iw, ih = self._img_orig.size
         ix2 = ox + iw * s
         iy2 = oy + ih * s
-        # Dim outside selection with stipple overlay
         for coords in [
             (ox, oy, cx1, iy2),
             (cx2, oy, ix2, iy2),
@@ -224,6 +252,12 @@ class LCDEditorWindow(ctk.CTk):
             cx1, cy1, cx2, cy2,
             outline='#50B4FF', width=2, tags='sel',
         )
+        h = self._HANDLE_R
+        for hx, hy in [(cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2)]:
+            self._canvas.create_rectangle(
+                hx - h, hy - h, hx + h, hy + h,
+                fill='#50B4FF', outline='white', width=1, tags='sel',
+            )
 
     # ── Mouse events ───────────────────────────────────────────────────
 
@@ -235,29 +269,81 @@ class LCDEditorWindow(ctk.CTk):
         iw, ih = self._img_orig.size
         return max(0, min(ix, iw)), max(0, min(iy, ih))
 
+    def _hit_test(self, cx: int, cy: int) -> str | None:
+        """Return 'tl','tr','bl','br','move', or None."""
+        if self._sel is None or self._img_orig is None:
+            return None
+        ox, oy = self._img_offset
+        s = self._img_scale
+        x1, y1, x2, y2 = self._sel
+        cx1, cy1 = ox + x1 * s, oy + y1 * s
+        cx2, cy2 = ox + x2 * s, oy + y2 * s
+        h = self._HANDLE_R
+        if abs(cx - cx1) <= h and abs(cy - cy1) <= h:
+            return 'tl'
+        if abs(cx - cx2) <= h and abs(cy - cy1) <= h:
+            return 'tr'
+        if abs(cx - cx1) <= h and abs(cy - cy2) <= h:
+            return 'bl'
+        if abs(cx - cx2) <= h and abs(cy - cy2) <= h:
+            return 'br'
+        if cx1 <= cx <= cx2 and cy1 <= cy <= cy2:
+            return 'move'
+        return None
+
     def _on_mouse_down(self, event) -> None:
         if self._img_orig is None:
             return
-        self._drag_start = self._canvas_to_image(event.x, event.y)
+        mode = self._hit_test(event.x, event.y)
+        if mode is None:
+            return
+        self._drag_mode = mode
+        self._drag_origin = (event.x, event.y)
+        self._sel_at_drag = self._sel
 
     def _on_mouse_drag(self, event) -> None:
-        if self._img_orig is None or self._drag_start is None:
+        if self._img_orig is None or self._drag_mode is None or self._sel_at_drag is None:
             return
-        sx, sy = self._drag_start
-        ex, ey = self._canvas_to_image(event.x, event.y)
         iw, ih = self._img_orig.size
-        dx = ex - sx
-        dy = ey - sy
-        side = max(1, min(abs(dx), abs(dy)))
-        x1 = sx if dx >= 0 else sx - side
-        y1 = sy if dy >= 0 else sy - side
-        x1 = max(0, min(x1, iw - side))
-        y1 = max(0, min(y1, ih - side))
-        self._sel = (x1, y1, x1 + side, y1 + side)
+        s = self._img_scale
+
+        if self._drag_mode == 'move':
+            ox0, oy0 = self._drag_origin
+            dcx = event.x - ox0
+            dcy = event.y - oy0
+            dix = dcx / s
+            diy = dcy / s
+            x1, y1, x2, y2 = self._sel_at_drag
+            side = x2 - x1
+            nx1 = max(0, min(int(x1 + dix), iw - side))
+            ny1 = max(0, min(int(y1 + diy), ih - side))
+            self._sel = (nx1, ny1, nx1 + side, ny1 + side)
+        else:
+            # Corner resize — opposite corner is anchor
+            ax1, ay1, ax2, ay2 = self._sel_at_drag
+            mx, my = self._canvas_to_image(event.x, event.y)
+            if self._drag_mode == 'br':
+                anchor_x, anchor_y = ax1, ay1
+                side = max(1, min(mx - anchor_x, my - anchor_y, iw - anchor_x, ih - anchor_y))
+                self._sel = (anchor_x, anchor_y, anchor_x + side, anchor_y + side)
+            elif self._drag_mode == 'bl':
+                anchor_x, anchor_y = ax2, ay1
+                side = max(1, min(anchor_x - mx, my - anchor_y, anchor_x, ih - anchor_y))
+                self._sel = (anchor_x - side, anchor_y, anchor_x, anchor_y + side)
+            elif self._drag_mode == 'tr':
+                anchor_x, anchor_y = ax1, ay2
+                side = max(1, min(mx - anchor_x, anchor_y - my, iw - anchor_x, anchor_y))
+                self._sel = (anchor_x, anchor_y - side, anchor_x + side, anchor_y)
+            elif self._drag_mode == 'tl':
+                anchor_x, anchor_y = ax2, ay2
+                side = max(1, min(anchor_x - mx, anchor_y - my, anchor_x, anchor_y))
+                self._sel = (anchor_x - side, anchor_y - side, anchor_x, anchor_y)
         self._draw_selection()
 
     def _on_mouse_up(self, event) -> None:
-        self._drag_start = None
+        self._drag_mode = None
+        self._drag_origin = None
+        self._sel_at_drag = None
 
     # ── Upload ─────────────────────────────────────────────────────────
 
