@@ -172,7 +172,7 @@ class LCDThread(threading.Thread):
                     open_device(dev)
                     width, height = get_resolution(dev)
                     logger.info('Resolution: %dx%d', width, height)
-                    frames = self._load_frames(width, height)
+                    frames = self._load_frames(load_config(), width, height)
                     frame_idx = 0
                     if frames is None:
                         close_device(dev)
@@ -195,11 +195,11 @@ class LCDThread(threading.Thread):
             if self._reload.is_set():
                 self._reload.clear()
                 try:
-                    new_frames = self._load_frames(width, height)
+                    cfg = load_config()
+                    new_frames = self._load_frames(cfg, width, height)
                     if new_frames is not None:
                         frames = new_frames
                         frame_idx = 0
-                        cfg = load_config()
                         logger.info('Image reloaded: %s', cfg.image_path)
                 except Exception:
                     logger.exception('Image reload failed')
@@ -236,10 +236,9 @@ class LCDThread(threading.Thread):
                 logging.getLogger('lcd').warning('Error closing device: %s', exc)
 
     @staticmethod
-    def _load_frames(width: int, height: int) -> list[tuple[bytes, float]] | None:
+    def _load_frames(cfg, width: int, height: int) -> list[tuple[bytes, float]] | None:
         """Return list of (rgb565_bytes, delay_s). Single-element for static images."""
         logger = logging.getLogger('lcd')
-        cfg = load_config()
         if not cfg.image_path:
             logger.warning('No image_path configured — skipping encode')
             return None
