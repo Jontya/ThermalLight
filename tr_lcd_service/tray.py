@@ -281,7 +281,6 @@ class TrayApp:
             return
         self._exiting = True
         logging.getLogger('tray').info('Exit requested')
-        self._lcd.stop()
         if self._window is not None:
             self._window.after(0, self._window.destroy)
 
@@ -313,6 +312,7 @@ class TrayApp:
 
         self._window.mainloop()   # blocks; exits when window.destroy() is called
 
+        self._lcd.stop()
         self._icon.stop()
         self._lcd.join(timeout=5)
         log.info('TRLCDTray stopped')
