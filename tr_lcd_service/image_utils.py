@@ -14,10 +14,3 @@ def encode_rgb565(img: Image.Image) -> bytes:
     rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
     return rgb565.astype('>u2').tobytes()
 
-
-def pad_to_512(data: bytes) -> bytes:
-    """Pad data with zero bytes to the next 512-byte boundary."""
-    remainder = len(data) % 512
-    if remainder:
-        data += b'\x00' * (512 - remainder)
-    return data
