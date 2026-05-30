@@ -24,6 +24,11 @@ LCD_SIZE = 320
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('blue')
 
+try:
+    _GIF_BADGE_FONT = ImageFont.truetype('arialbd.ttf', 10)
+except OSError:
+    _GIF_BADGE_FONT = ImageFont.load_default()
+
 
 class LCDEditorWindow(ctk.CTk):
     def __init__(self, lcd_thread) -> None:
@@ -164,10 +169,7 @@ class LCDEditorWindow(ctk.CTk):
                     thumb = thumb.convert('RGBA')
                     badge = Image.new('RGBA', thumb.size, (0, 0, 0, 0))
                     d = ImageDraw.Draw(badge)
-                    try:
-                        fnt = ImageFont.truetype('arialbd.ttf', 10)
-                    except OSError:
-                        fnt = ImageFont.load_default()
+                    fnt = _GIF_BADGE_FONT
                     text = 'GIF'
                     bb = d.textbbox((0, 0), text, font=fnt)
                     tw, th = bb[2] - bb[0], bb[3] - bb[1]
