@@ -1,8 +1,18 @@
-# TRLCDService
+# ThermalLight
 
-System tray app that pushes a static image to the **Thermalright Elite Vision AIO LCD** (USB VID `0x0416`, mass-storage class device `USBDISPLAY`) and keeps it there.
+A Windows system-tray app that displays custom images and animated GIFs on the LCD screen built into the **Thermalright Elite Vision AIO** cooler. Runs silently at startup, no admin rights required, no TRCC driver needed.
 
-The icon lives in the Windows notification area ("Show Hidden Icons"). Right-click to change the image. No TRCC driver, no admin rights, no Windows service.
+---
+
+## Features
+
+- **Image editor** — crop any image to a square, preview it, then push it to the LCD with one click
+- **Animated GIF support** — full per-frame playback at the GIF's native frame rate
+- **Gallery** — browse all uploaded images in a scrollable thumbnail panel; active image highlighted
+- **Upload** — import PNG, JPEG, BMP, GIF, WebP, or TIFF files from anywhere
+- **Startup registration** — registers itself to launch at Windows login automatically
+- **System tray** — lives in the notification area; double-click to open the editor
+- **Custom taskbar icon** — LCD-branded icon, not the default Python icon
 
 ---
 
@@ -10,68 +20,79 @@ The icon lives in the Windows notification area ("Show Hidden Icons"). Right-cli
 
 - Windows 10/11 (64-bit)
 - Python 3.10 or later — [python.org](https://www.python.org/downloads/)
-- AIO connected and recognised by Windows as a USB mass-storage device
+- Thermalright Elite Vision AIO connected via USB (VID `0x87AD` / PID `0x70DB`)
+- libusb-1.0 (installed automatically by `install.bat` via the `libusb` pip package)
 
 ---
 
 ## Installation
 
-1. **Run `install.bat`** from the `tr_lcd_service\` folder (double-click — no admin needed):
-   ```
-   install.bat
-   ```
-   This installs Python dependencies, registers the app to start at login, and launches the tray icon immediately.
+Double-click **`tr_lcd_service\install.bat`** — no admin needed.
 
-2. **Set your image** — the tray icon appears in the notification area. Right-click it and choose **Change Image...**, then pick any PNG, JPEG, BMP, etc. The image is copied to `C:\ProgramData\TRLCDService\` and the LCD updates within seconds.
+It will:
+1. Install all Python dependencies (`pip install -r requirements.txt`)
+2. Register ThermalLight to start at Windows login
+3. Launch the tray icon immediately
 
-The app starts automatically at every Windows login via a registry key (`HKCU\...\Run`).
-
----
-
-## Changing the image
-
-Right-click the tray icon → **Change Image...** → pick a file.
-
-The image is automatically resized to the resolution the device reports during the HID handshake, so no pre-scaling is needed.
+The LCD icon appears in the notification area. Double-click it to open the editor.
 
 ---
 
-## Checking the log
+## Usage
 
-```
-C:\ProgramData\TRLCDService\service.log
-```
+### Opening the editor
 
-Or right-click the tray icon → **Open Log**.
+Double-click the tray icon, or right-click → **Open Editor**.
 
-Rotating at 5 MB, 2 backups kept. Set `log_level = DEBUG` in `config.ini` for verbose output.
+### Setting an image
 
----
+1. Click **Upload** to import a file (PNG, JPEG, BMP, GIF, WebP, TIFF)
+2. Drag the selection box to choose the crop area; drag a corner handle to resize it
+3. Click **Apply** — the image is cropped, resized to 240×240, and sent to the LCD instantly
 
-## Manual config
+Previously applied images stay in the gallery for one-click reuse.
 
-`tr_lcd_service\config.ini` holds three settings:
+### Animated GIFs
 
-```ini
-[lcd]
-image_path      = C:\ProgramData\TRLCDService\current_image.png
-resend_interval = 60
-log_level       = INFO
-```
-
-`image_path` is updated automatically when you use "Change Image...". You can also edit it by hand; the tray app re-reads config between frames.
+Upload a GIF the same way as a static image. Each frame is encoded and played back on the LCD at the GIF's original frame rate.
 
 ---
 
 ## Uninstalling
 
-Run `uninstall.bat`, or manually:
+Double-click **`tr_lcd_service\uninstall.bat`**, then right-click the tray icon → **Exit**.
 
-1. Right-click tray icon → **Exit**
-2. Delete the startup registry entry:
-   ```
-   reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v TRLCDTray /f
-   ```
+Or manually:
+```
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v TRLCDTray /f
+```
+
+---
+
+## Log file
+
+```
+C:\ProgramData\TRLCDService\service.log
+```
+
+Right-click tray icon → **Open Log** to view it directly. Rotates at 5 MB, 2 backups kept.
+
+Set `log_level = DEBUG` in `config.ini` for verbose USB output.
+
+---
+
+## Manual config
+
+`C:\ProgramData\TRLCDService\config.ini`:
+
+```ini
+[lcd]
+image_path      = C:\ProgramData\TRLCDService\_lcd_output.png
+resend_interval = 1
+log_level       = INFO
+```
+
+`image_path` is updated automatically on Apply. `resend_interval` controls how often the static frame is re-pushed to keep the display alive (default 1 s).
 
 ---
 
@@ -79,17 +100,34 @@ Run `uninstall.bat`, or manually:
 
 | Symptom | Check |
 |---------|-------|
-| LCD stays blank after picking image | Check the log for SCSI errors; ensure AIO is plugged in |
-| "Device not found" in log | Windows must show the AIO as a USB storage device; retry after replugging |
-| Unknown FBL byte warning | Add your FBL value and resolution to `_FBL_MAP` in `device.py` (raw response is logged at DEBUG level) |
-| No icon in notification area | Run `python tray.py` in a terminal to see startup errors directly |
+| LCD stays blank | Check log for USB errors; replug the AIO and wait for Windows to re-enumerate it |
+| "Device not found" in log | Confirm VID `0x87AD` / PID `0x70DB` appears in Device Manager under USB devices |
+| libusb error on first run | Re-run `install.bat`; ensure `pip install libusb` completed without errors |
+| Tray icon missing | Run `python tr_lcd_service\tray.py` in a terminal to see startup errors |
+| Image looks stretched | Use the crop handles to select a square region before applying |
 
 ---
 
 ## How it works
 
-1. **Device discovery** — finds the physical drive (VID `0x0416`, description `USBDISPLAY`) via WMI / SetupAPI, and the companion HID interface.
-2. **HID handshake** — four 64-byte feature reports (`0xDA`–`0xDD`) elicit a response containing the screen resolution (FBL byte) and serial number.
-3. **Image encoding** — source image is resized to detected resolution and converted to packed little-endian **RGB565** (16 bpp), then padded to 512-byte alignment.
-4. **SCSI frame** — pixel data is sent via `IOCTL_SCSI_PASS_THROUGH_DIRECT` with a 16-byte vendor CDB (opcode `0xF5`).
-5. **Resend loop** — frame is resent every `resend_interval` seconds (default 60 s) to survive USB power events; the loop runs on a daemon thread inside the tray process.
+1. **Device** — pyusb opens the vendor-class bulk USB device directly; no OS driver or mass-storage interface required
+2. **Protocol** — a single bulk OUT write sends a 64-byte header (magic, dimensions, RGB565 mode) followed by raw pixel data; no ACK needed
+3. **Image pipeline** — source → PIL crop → resize to 240×240 (LANCZOS) → numpy RGB565 encode → bulk write
+4. **GIF playback** — all frames pre-encoded at load time; LCD thread cycles through `(bytes, delay_s)` pairs
+5. **Resend loop** — static images are resent every `resend_interval` seconds to prevent the display blanking on USB idle
+6. **Thread model** — LCD runs on a daemon thread; GUI and thread communicate only via `threading.Event` and config on disk — no shared mutable state
+
+---
+
+## Project structure
+
+```
+tr_lcd_service/
+├── tray.py          # Entry point — tray icon, app lifecycle, LCD driver thread
+├── gui.py           # CustomTkinter editor window (gallery, crop editor, upload)
+├── device.py        # USB device discovery and bulk image transfer
+├── image_utils.py   # Resize and numpy RGB565 encoding
+├── config.py        # INI config read/write
+├── install.bat      # One-click install and startup registration
+└── uninstall.bat    # Removes startup entry
+```
