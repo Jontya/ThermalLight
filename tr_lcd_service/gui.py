@@ -51,6 +51,7 @@ class LCDEditorWindow(ctk.CTk):
         self._thumb_cache: dict[tuple[str, float], ImageTk.PhotoImage] = {}
         self._gallery_state: list[tuple[str, float]] = []   # last rendered (normpath, mtime) list
         self._gallery_buttons: list[tuple[str, ctk.CTkButton]] = []  # parallel to _gallery_state
+        self._rotation: int = 0
 
         self.title('Thermalright LCD Editor')
         self.geometry('920x580')
@@ -156,11 +157,21 @@ class LCDEditorWindow(ctk.CTk):
         self._canvas.bind('<B1-Motion>',       self._on_mouse_drag)
         self._canvas.bind('<ButtonRelease-1>', self._on_mouse_up)
 
+        btn_frame = ctk.CTkFrame(editor_frame, fg_color='transparent')
+        btn_frame.grid(row=1, column=0, padx=8, pady=(4, 8), sticky='e')
+
+        self._rotate_btn = ctk.CTkButton(
+            btn_frame, text='↻', width=40,
+            command=self._on_rotate, state='disabled',
+            font=ctk.CTkFont(size=18),
+        )
+        self._rotate_btn.pack(side='left', padx=(0, 6))
+
         self._apply_btn = ctk.CTkButton(
-            editor_frame, text='Apply to LCD', width=160,
+            btn_frame, text='Apply to LCD', width=160,
             command=self._on_apply, state='disabled',
         )
-        self._apply_btn.grid(row=1, column=0, padx=8, pady=(4, 8), sticky='e')
+        self._apply_btn.pack(side='left')
 
         self._status_label = ctk.CTkLabel(
             editor_frame, text='Upload an image to get started',
@@ -259,9 +270,11 @@ class LCDEditorWindow(ctk.CTk):
             return
         self._source_path = path
         self._img_orig = img
+        self._rotation = 0
         self._render_image()
         self._default_selection()
         self._apply_btn.configure(state='normal')
+        self._rotate_btn.configure(state='normal')
         self._status_label.configure(
             text=os.path.basename(path), text_color='white',
         )
@@ -438,6 +451,16 @@ class LCDEditorWindow(ctk.CTk):
         self._drag_origin = None
         self._sel_at_drag = None
 
+    # ── Rotate ────────────────────────────────────────────────────────
+
+    def _on_rotate(self) -> None:
+        if self._img_orig is None:
+            return
+        self._rotation = (self._rotation + 90) % 360
+        self._img_orig = self._img_orig.rotate(-90, expand=True)
+        self._render_image()
+        self._default_selection()
+
     # ── Upload ─────────────────────────────────────────────────────────
 
     def _on_upload(self) -> None:
@@ -473,7 +496,10 @@ class LCDEditorWindow(ctk.CTk):
                 out_frames, durations = [], []
                 for i in range(n):
                     src.seek(i)
-                    frame = src.convert('RGB').crop((x1, y1, x2, y2))
+                    frame = src.convert('RGB')
+                    if self._rotation:
+                        frame = frame.rotate(-self._rotation, expand=True)
+                    frame = frame.crop((x1, y1, x2, y2))
                     out_frames.append(frame.resize((LCD_SIZE, LCD_SIZE), Image.LANCZOS))
                     durations.append(src.info.get('duration', 100))
                 out_frames[0].save(
